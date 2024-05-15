@@ -1,0 +1,82 @@
+trigger:
+- main
+
+pool:
+  vmImage: windows-latest
+
+stages: 
+- stage: BuildProject 
+  displayName: Build the database project 
+  jobs:
+  - job: 
+    displayName: Build and publish artifact
+    steps: 
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '**/*.sqlproj'
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(agent.builddirectory)'
+        Contents: '**\*.dacpac'
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(build.artifactstagingdirectory)'
+        artifact: 'build-dacpac'
+        publishLocation: 'pipeline'
+- stage: DeployProject
+  displayName: Deploy database project to QA and Production
+  jobs:
+  - job : DeployToQADatabase 
+    displayName: Deploy to QA database 
+    steps: 
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        buildType: 'current'
+        artifactName: 'build-dacpac'
+        targetPath: '$(Pipeline.Workspace)'
+    - task: SqlAzureDacpacDeployment@1
+      inputs:
+        azureSubscription: 'SUBSCRIPTION_NAME_AND_ID'
+        AuthenticationType: 'server'
+        ServerName: 'SERVER_NAME'
+        DatabaseName: 'DATABASE_NAME'
+        SqlUsername: 'SQL_USERNAME'
+        SqlPassword: '$(sqlpassword)'
+        deployType: 'DacpacTask'
+        DeploymentAction: 'Publish'
+        DacpacFile: '**/*.dacpac'
+        AdditionalArguments: '/p:DropObjectsNotInSource=True /p:ExcludeObjectTypes=Users;Logins'
+        IpDetectionMethod: 'AutoDetect'
+  - job: waitForValidation 
+    displayName: Wait for external validation  
+    pool: server 
+    dependsOn: DeployToQADatabase 
+    timeoutInMinutes: 4320 
+    steps:  
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'USER_EMAIL'
+  - job: DeployToProductionDatabase 
+    displayName: Deploy to production database 
+    dependsOn: waitForValidation 
+    steps: 
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        buildType: 'current'
+        artifactName: 'build-dacpac'
+        targetPath: '$(Pipeline.Workspace)'
+    - task: SqlAzureDacpacDeployment@1
+      inputs:
+        azureSubscription: 'SUBSCRIPTION_NAME_AND_ID'
+        AuthenticationType: 'server'
+        ServerName: 'SERVER_NAME'
+        DatabaseName: 'DATABASE_NAME'
+        SqlUsername: 'SQL_USERNAME'
+        SqlPassword: '$(sqlpassword)'
+        deployType: 'DacpacTask'
+        DeploymentAction: 'Publish'
+        DacpacFile: '**/*.dacpac'
+        AdditionalArguments: '/p:DropObjectsNotInSource=True /p:ExcludeObjectTypes=Users;Logins'
+        IpDetectionMethod: 'AutoDetect'
